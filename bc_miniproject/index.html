@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Certificate Validation System</title>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js"></script>
+
+    <style>
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        padding: 40px;
+        line-height: 1.6;
+        background-color: #f0f2f5;
+      }
+      .container {
+        max-width: 600px;
+        margin: auto;
+        background: white;
+        padding: 30px;
+        border-radius: 15px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+      }
+      h1 {
+        text-align: center;
+        color: #1a73e8;
+      }
+      h2 {
+        color: #2c3e50;
+        border-bottom: 2px solid #3498db;
+        padding-bottom: 8px;
+        margin-top: 30px;
+      }
+      input[type="file"] {
+        margin: 15px 0;
+        display: block;
+        width: 100%;
+        pading: 10px;
+        border: 1px dashed #3498db;
+        border-radius: 5px;
+      }
+      button {
+        background: #3498db;
+        color: white;
+        border: none;
+        padding: 12px 24px;
+        border-radius: 5px;
+        cursor: pointer;
+        font-weight: bold;
+        width: 100%;
+        font-size: 1rem;
+        transition: 0.3s;
+      }
+      button:hover {
+        background: #2980b9;
+        transform: translateY(-1px);
+      }
+      #result {
+        margin-top: 25px;
+        font-weight: bold;
+        font-size: 1.1rem;
+        text-align: center;
+        padding: 15px;
+        border-radius: 8px;
+      }
+      .loading {
+        color: #f39c12;
+        background: #fef9e7;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="container">
+      <h1>🎓 Certificate Verifier</h1>
+
+      <h2>Step 1: University Admin (Upload)</h2>
+      <p style="font-size: 0.85rem; color: #666">
+        Store a tamper-proof fingerprint of the document on Sepolia.
+      </p>
+      <input type="file" id="fileInput" />
+      <button onclick="uploadCert()">Publish to Blockchain</button>
+
+      <hr style="margin: 40px 0; border: 0; border-top: 1px solid #eee" />
+
+      <h2>Step 2: Verification (Public)</h2>
+      <p style="font-size: 0.85rem; color: #666">
+        Instantly verify if the file is original and registered.
+      </p>
+      <input type="file" id="verifyFile" />
+      <button onclick="verifyCert()">Verify Authenticity</button>
+
+      <div id="result"></div>
+    </div>
+
+    <script>
+      // Contract Details
+      const contractAddress = "0x16c1B2c7B5f8b9E8De91E50d1b95DF9EF379e8Ab";
+      const SEPOLIA_CHAIN_ID = "0xaa36a7"; // 11155111 in hex
+
+      const abi = [
+        {
+          inputs: [{ name: "hash", type: "string" }],
+          name: "addCertificate",
+          outputs: [],
+          stateMutability: "nonpayable",
+          type: "function",
+        },
+        {
+          inputs: [{ name: "hash", type: "string" }],
+          name: "verifyCertificate",
+          outputs: [{ name: "", type: "bool" }],
+          stateMutability: "view",
+          type: "function",
+        },
+      ];
+
+      // helper to update UI
+      function setStatus(msg, className = "") {
+        const el = document.getElementById("result");
+        el.innerText = msg;
+        el.className = className;
+      }
+
+      // Check for correct network
+      async function checkNetwork(provider) {
+        const network = await provider.getNetwork();
+        if (network.chainId !== 11155111) {
+          alert("Please switch MetaMask to the Sepolia Testnet!");
+          try {
+            await window.ethereum.request({
+              method: "wallet_switchEthereumChain",
+              params: [{ chainId: SEPOLIA_CHAIN_ID }],
+            });
+          } catch (e) {
+            console.error("Switch failed", e);
+          }
+          return false;
+        }
+        return true;
+      }
+
+      async function getHash(file) {
+        const buffer = await file.arrayBuffer();
+        const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+        return Array.from(new Uint8Array(hashBuffer))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+      }
+
+      // Action: Upload (Requires Signer + Gas)
+      async function uploadCert() {
+        const file = document.getElementById("fileInput").files[0];
+        if (!file) return alert("Select a file first!");
+
+        if (!window.ethereum) return alert("Install MetaMask!");
+
+        try {
+          setStatus("⌛ Connecting to wallet...", "loading");
+          const provider = new ethers.providers.Web3Provider(window.ethereum);
+          if (!(await checkNetwork(provider)))
+            return setStatus("❌ Wrong Network");
+
+          await provider.send("eth_requestAccounts", []);
+          const signer = await provider.getSigner();
+          const contract = new ethers.Contract(contractAddress, abi, signer);
+
+          const hash = await getHash(file);
+          setStatus("⌛ Confirming transaction in MetaMask...");
+
+          const tx = await contract.addCertificate(hash);
+          setStatus("⛏️ Blockchain is mining your transaction... please wait.");
+          await tx.wait();
+
+          setStatus(
+            "✅ Success! Certificate hash is now permanent on the blockchain.",
+          );
+        } catch (error) {
+          console.error(error);
+          setStatus("❌ Error: " + (error.reason || error.message));
+        }
+      }
+
+      // Action: Verify (Requires Provider only - Gas Free!)
+      async function verifyCert() {
+        const file = document.getElementById("verifyFile").files[0];
+        if (!file) return alert("Select a file to verify!");
+
+        if (!window.ethereum) return alert("Install MetaMask!");
+
+        try {
+          setStatus("🔍 Checking blockchain records...", "loading");
+          const provider = new ethers.providers.Web3Provider(window.ethereum);
+
+          // Use provider only for "view" functions (no MetaMask popup!)
+          const contract = new ethers.Contract(contractAddress, abi, provider);
+
+          const hash = await getHash(file);
+          const isValid = await contract.verifyCertificate(hash);
+
+          if (isValid) {
+            document.getElementById("result").innerHTML =
+              "<span style='color: #27ae60;'>✅ AUTHENTIC: This document matches our official records.</span>";
+            document.getElementById("result").style.background = "#eafaf1";
+          } else {
+            document.getElementById("result").innerHTML =
+              "<span style='color: #c0392b;'>❌ UNVERIFIED: This document was not found or has been altered.</span>";
+            document.getElementById("result").style.background = "#fdedec";
+          }
+        } catch (error) {
+          console.error(error);
+          setStatus("❌ Verification Failed. Ensure MetaMask is on Sepolia.");
+        }
+      }
+    </script>
+  </body>
+</html>
